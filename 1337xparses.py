@@ -1,75 +1,132 @@
 # VERSION: 1.0
-# AUTHOR: Potato
+# AUTHORS: Your Name (your.email@example.com)
 
-from helpers import retrieve_url
-from novaprinter import prettyPrinter
+# LICENSING INFORMATION
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+
+import re
 from html.parser import HTMLParser
+from helpers import download_file, retrieve_url
+from novaprinter import prettyPrinter
 
-class x1337x(object):
+class leetx(object):
     url = 'https://1337x.to'
     name = '1337x'
-    supported_categories = {'all': 'search'}
+    supported_categories = {
+        'all': 'all',
+        'anime': 'anime',
+        'books': 'books', 
+        'games': 'games',
+        'movies': 'movies',
+        'music': 'music',
+        'software': 'software',
+        'tv': 'tv'
+    }
 
-    class Parser(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.inside_table = False
-            self.inside_row = False
-            self.col_idx = 0
-            self.current_row = {}
-            self.results = []
+    def __init__(self):
+        pass
 
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag == 'table' and 'table-list' in attrs.get('class', ''):
-                self.inside_table = True
-            elif self.inside_table and tag == 'tr':
-                self.inside_row = True
-                self.col_idx = 0
-                self.current_row = {}
-            elif self.inside_row and tag == 'a' and 'href' in attrs:
-                self.current_row['detail_url'] = attrs['href']
-
-        def handle_endtag(self, tag):
-            if tag == 'table' and self.inside_table:
-                self.inside_table = False
-            elif tag == 'tr' and self.inside_row:
-                self.inside_row = False
-                if self.current_row.get('name'):
-                    self.results.append(self.current_row)
-
-        def handle_data(self, data):
-            if self.inside_row:
-                text = data.strip()
-                if text:
-                    # Take first non-empty data as name
-                    if 'name' not in self.current_row:
-                        self.current_row['name'] = text
+    def download_torrent(self, info):
+        print(download_file(info))
 
     def search(self, what, cat='all'):
-        url = f"{self.url}/search/{what}/1/"
-        html = retrieve_url(url)
-        parser = self.Parser()
-        parser.feed(html)
-        for row in parser.results:
-            # Try to fetch the magnet link from the detail page
-            magnet = ''
-            desc_link = self.url + row.get('detail_url', '')
+        what = what.replace('%20', '+')
+        
+        # Search multiple pages
+        for page in range(1, 4):  # Search first 3 pages
             try:
-                detail_html = retrieve_url(desc_link)
-                i = detail_html.find('magnet:?xt=')
-                if i != -1:
-                    j = detail_html.find('"', i)
-                    magnet = detail_html[i:j]
+                # Build search URL
+                if cat == 'all':
+                    search_url = f'{self.url}/search/{what}/{page}/'
+                else:
+                    # Category-specific search
+                    cat_map = {
+                        'anime': '/cat/Anime',
+                        'books': '/cat/Books', 
+                        'games': '/cat/Games',
+                        'movies': '/cat/Movies',
+                        'music': '/cat/Music',
+                        'software': '/cat/Applications',
+                        'tv': '/cat/TV'
+                    }
+                    cat_path = cat_map.get(cat, '')
+                    if cat_path:
+                        search_url = f'{self.url}{cat_path}/{page}/'
+                    else:
+                        search_url = f'{self.url}/search/{what}/{page}/'
+                
+                # Get page content
+                data = retrieve_url(search_url)
+                if not data:
+                    break
+                    
+                # Parse results using regex (more reliable)
+                self.parse_results(data)
+                    
             except Exception:
-                pass
-            res = {
-                'name': row.get('name', ''),
-                'link': magnet,
-                'size': '',
-                'seeds': '',
-                'leech': '',
-                'engine_url': self.url,
-                'desc_link': desc_link
-            }
-            prettyPrinter(res)
+                break
+
+    def parse_results(self, data):
+        """Parse search results using regex"""
+        try:
+            # Find all torrent rows in the table
+            torrent_pattern = r'<tr[^>]*>.*?</tr>'
+            rows = re.findall(torrent_pattern, data, re.DOTALL)
+            
+            for row in rows:
+                # Skip header rows
+                if 'th>' in row or 'Type' in row:
+                    continue
+                    
+                # Extract torrent name and description link
+                name_pattern = r'<a[^>]*href="(/torrent/[^"]*)"[^>]*>([^<]+)</a>'
+                name_match = re.search(name_pattern, row)
+                if not name_match:
+                    continue
+                    
+                desc_link = f"https://1337x.to{name_match.group(1)}"
+                name = name_match.group(2).strip()
+                
+                # Extract magnet link
+                magnet_pattern = r'href="(magnet:[^"]*)"'
+                magnet_match = re.search(magnet_pattern, row)
+                if not magnet_match:
+                    continue
+                    
+                magnet_link = magnet_match.group(1)
+                
+                # Extract size (look for patterns like "1.2 GB", "500 MB", etc.)
+                size_pattern = r'(\d+(?:\.\d+)?\s*[KMGT]?B)'
+                size_match = re.search(size_pattern, row, re.IGNORECASE)
+                size = size_match.group(1) if size_match else '-1'
+                
+                # Extract seeds and leeches (look for numbers in table cells)
+                numbers = re.findall(r'>(\d+(?:,\d+)?)<', row)
+                seeds = numbers[0].replace(',', '') if len(numbers) > 0 else '-1'
+                leech = numbers[1].replace(',', '') if len(numbers) > 1 else '-1'
+                
+                # Create result dict
+                result = {
+                    'link': magnet_link,
+                    'name': name,
+                    'size': size,
+                    'seeds': seeds,
+                    'leech': leech,
+                    'engine_url': 'https://1337x.to',
+                    'desc_link': desc_link,
+                    'pub_date': '-1'
+                }
+                
+                # Print result
+                prettyPrinter(result)
+                
+        except Exception:
+            pass
